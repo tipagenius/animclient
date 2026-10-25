@@ -1,9 +1,8 @@
 name: Debug Build
 
+# Disabled on push in this fork, run manually if needed.
 on:
-  push:
-    branches-ignore:
-      - gh-readonly-queue/**
+  workflow_dispatch:
 
 jobs:
   build-cmake:
