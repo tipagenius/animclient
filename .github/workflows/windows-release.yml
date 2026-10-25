@@ -1,0 +1,78 @@
+name: Windows Release
+
+# Flow:
+#   git tag anim-v1 && git push origin anim-v1
+#   Actions builds the Windows client and publishes it as a GitHub release for that tag.
+#
+# Unlike release.yml this does not need the BESTCLIENT_OFFICIAL_CODE secret,
+# the resulting build is an unofficial BestClient build.
+on:
+  push:
+    tags:
+      - "anim-*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing tag to publish the Windows build for"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CLIENT_NAME: BestClient
+  TAG_NAME: ${{ github.event.inputs.tag_name || github.ref_name }}
+
+jobs:
+  build-windows:
+    name: Build Release (windows)
+    runs-on: windows-latest
+    env:
+      CARGO_HTTP_MULTIPLEXING: false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ env.TAG_NAME }}
+        submodules: recursive
+
+    - name: Install Vulkan SDK
+      uses: humbletim/install-vulkan-sdk@v1.2
+      with:
+        version: 1.3.296.0
+        cache: true
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: |
+          ./
+
+    - name: Build release binaries
+      shell: bash
+      run: |
+        cmake -S . -B build-release -A x64 -DTOOLS=OFF -DDOWNLOAD_GTEST=OFF -DVULKAN=ON
+        cmake --build build-release --config Release --target game-client
+        cmake --build build-release --config Release --target bestclient-updater
+
+    - name: Package release build
+      shell: bash
+      run: |
+        cmake --build build-release --config Release --target package_default
+        mkdir artifacts
+        mv build-release/*-win64.zip artifacts/${{ env.CLIENT_NAME }}-windows.zip
+
+    - name: Upload release package
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-windows
+        path: artifacts/${{ env.CLIENT_NAME }}-windows.zip
+
+    - name: Publish GitHub release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        name: ${{ env.CLIENT_NAME }} ${{ env.TAG_NAME }} (animated skins)
+        body: |
+          Unofficial BestClient build with animated skin support (GIF/APNG/WebP).
+          Put `<skin>.gif`, `<skin>.apng` or an animated `<skin>.png` into the `skins` folder, see docs/ANIMATED_SKINS.md.
+        files: artifacts/${{ env.CLIENT_NAME }}-windows.zip
