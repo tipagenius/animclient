@@ -547,7 +547,16 @@ namespace MediaDecoder
 
 		auto ConsumeFrame = [&]() {
 			int DurationMs = FallbackFrameDurationMs;
-			if(DecodeAllFrames)
+			if(DecodeAllFrames && Limits.m_ExactTiming)
+			{
+				int64_t PacketDurationMs = 0;
+				if(PacketDurationTsForNextFrame > 0)
+					PacketDurationMs = av_rescale_q(PacketDurationTsForNextFrame, pStream->time_base, AVRational{1, 1000});
+				PacketDurationTsForNextFrame = 0;
+				// Same as browsers: delays of 10 ms or less are shown for 100 ms
+				DurationMs = PacketDurationMs > 10 ? (int)std::min<int64_t>(PacketDurationMs, MEDIA_MAX_FRAME_MS) : 100;
+			}
+			else if(DecodeAllFrames)
 			{
 				const int64_t PacketDurationTs = PacketDurationTsForNextFrame;
 				PacketDurationTsForNextFrame = 0;
@@ -593,7 +602,7 @@ namespace MediaDecoder
 				}
 			}
 
-			
+			if(!Limits.m_ExactTiming)
 			{
 				constexpr int MaxReasonableFallbackUpdateMs = 200; 
 				if(DurationMs > 0 && DurationMs <= MaxReasonableFallbackUpdateMs)
@@ -602,6 +611,7 @@ namespace MediaDecoder
 
 			
 			
+			if(!Limits.m_ExactTiming)
 			{
 				constexpr size_t StartupFrameClampCount = 60;
 				const size_t FrameIndex = DecodedFrames.m_vFrames.size();

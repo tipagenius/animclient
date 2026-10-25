@@ -10,6 +10,7 @@
 #include <base/time.h>
 
 #include <engine/engine.h>
+#include <engine/gfx/apng.h>
 #include <engine/gfx/image_manipulation.h>
 #include <engine/graphics.h>
 #include <engine/http.h>
@@ -519,12 +520,15 @@ void CSkins::PrepareAnimFrames(const char *pName, CSkinLoadData &Data) const
 	vFrames.reserve(Data.m_vAnimFrames.size());
 	for(CSkinLoadData::CAnimFrameData &Frame : Data.m_vAnimFrames)
 	{
-		// Snap the frame size to the skin grid ourselves, so we do not show a divisibility warning for every frame
-		const int SnappedWidth = std::max(DivX, round_to_int(Frame.m_Info.m_Width / (float)DivX) * DivX);
-		const int SnappedHeight = std::max(DivY, round_to_int(Frame.m_Info.m_Height / (float)DivY) * DivY);
-		if((size_t)SnappedWidth != Frame.m_Info.m_Width || (size_t)SnappedHeight != Frame.m_Info.m_Height)
+		// Resize to the maximum width and snap to the skin grid ourselves, so we do not log a warning for every frame
+		const float Scale = std::min(1.0f, MaxWidth / (float)Frame.m_Info.m_Width);
+		const int TargetWidth = std::max(DivX, round_to_int(Frame.m_Info.m_Width * Scale / DivX) * DivX);
+		const int TargetHeight = std::max(DivY, round_to_int(Frame.m_Info.m_Height * Scale / DivY) * DivY);
+		if((size_t)TargetWidth != Frame.m_Info.m_Width || (size_t)TargetHeight != Frame.m_Info.m_Height)
 		{
-			ResizeImage(Frame.m_Info, SnappedWidth, SnappedHeight);
+			// Spread the color of visible pixels into transparent ones, so resizing does not create dark edges
+			DilateImage(Frame.m_Info);
+			ResizeImage(Frame.m_Info, TargetWidth, TargetHeight);
 		}
 		if(!PrepareSkinImage(aContextName, Frame.m_Info, MaxWidth))
 		{
@@ -543,44 +547,42 @@ void CSkins::PrepareAnimFrames(const char *pName, CSkinLoadData &Data) const
 	Data.m_vAnimFrames = std::move(vFrames);
 }
 
-static bool IsAnimatedPng(const unsigned char *pData, size_t DataSize)
-{
-	static const unsigned char s_aPngSignature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
-	if(pData == nullptr || DataSize < sizeof(s_aPngSignature) || mem_comp(pData, s_aPngSignature, sizeof(s_aPngSignature)) != 0)
-	{
-		return false;
-	}
-	// The acTL chunk marks an APNG and must appear before the first IDAT chunk
-	size_t Offset = sizeof(s_aPngSignature);
-	while(Offset + 8 <= DataSize)
-	{
-		const size_t ChunkLength = ((size_t)pData[Offset] << 24) | ((size_t)pData[Offset + 1] << 16) | ((size_t)pData[Offset + 2] << 8) | (size_t)pData[Offset + 3];
-		const unsigned char *pChunkType = pData + Offset + 4;
-		if(mem_comp(pChunkType, "acTL", 4) == 0)
-		{
-			return true;
-		}
-		if(mem_comp(pChunkType, "IDAT", 4) == 0)
-		{
-			return false;
-		}
-		Offset += 12 + ChunkLength; // length, type, data, crc
-	}
-	return false;
-}
-
 bool CSkins::DecodeAnimatedSkin(const char *pName, const unsigned char *pData, size_t DataSize, CSkinLoadData &Data) const
 {
-	SMediaDecodeLimits Limits;
-	Limits.m_MaxDimension = g_Config.m_BcAnimSkinsMaxWidth;
-	Limits.m_MaxFrames = g_Config.m_BcAnimSkinsMaxFrames;
-	Limits.m_MaxAnimationDurationMs = g_Config.m_BcAnimSkinsMaxDuration;
-
+	constexpr size_t MAX_DECODED_BYTES = 256 * 1024 * 1024;
 	SMediaDecodedFrames DecodedFrames;
-	if(!MediaDecoder::DecodeAnimatedImageCpu(Graphics(), pData, DataSize, pName, DecodedFrames, Limits))
+	if(Apng::IsAnimated(pData, DataSize))
 	{
-		log_error("skins", "Failed to decode animated skin '%s'", pName);
-		return false;
+		// APNGs are decoded with libpng, FFmpeg builds often come without the PNG decoders
+		std::vector<CApngFrame> vApngFrames;
+		if(!Apng::Decode(pData, DataSize, pName, g_Config.m_BcAnimSkinsMaxFrames, MAX_DECODED_BYTES, vApngFrames))
+		{
+			log_error("skins", "Failed to decode animated PNG skin '%s'", pName);
+			return false;
+		}
+		for(CApngFrame &ApngFrame : vApngFrames)
+		{
+			SMediaRawFrame Frame;
+			Frame.m_Image = std::move(ApngFrame.m_Image);
+			Frame.m_DurationMs = ApngFrame.m_DurationMs;
+			DecodedFrames.m_vFrames.push_back(std::move(Frame));
+		}
+	}
+	else
+	{
+		SMediaDecodeLimits Limits;
+		// Decode in the original size, scaling the palette images with FFmpeg blends transparent pixels into the edges.
+		// Frames are downscaled later like regular skins.
+		Limits.m_MaxDimension = 1024;
+		Limits.m_MaxFrames = g_Config.m_BcAnimSkinsMaxFrames;
+		Limits.m_MaxTotalBytes = MAX_DECODED_BYTES;
+		Limits.m_MaxAnimationDurationMs = g_Config.m_BcAnimSkinsMaxDuration;
+		Limits.m_ExactTiming = true;
+		if(!MediaDecoder::DecodeAnimatedImageCpu(Graphics(), pData, DataSize, pName, DecodedFrames, Limits))
+		{
+			log_error("skins", "Failed to decode animated skin '%s'", pName);
+			return false;
+		}
 	}
 
 	Data.FreeAnimFrames();
@@ -612,7 +614,7 @@ void CSkins::LoadLocalAnimatedSkin(const char *pName, bool Cached, const unsigne
 	}
 
 	// APNG stored with the regular .png extension
-	if(IsAnimatedPng(pPngData, PngSize) && DecodeAnimatedSkin(pName, pPngData, PngSize, Data) && !Data.m_vAnimFrames.empty())
+	if(Apng::IsAnimated(pPngData, PngSize) && DecodeAnimatedSkin(pName, pPngData, PngSize, Data) && !Data.m_vAnimFrames.empty())
 	{
 		Data.m_LocalAnimation = !Cached;
 		return;
@@ -679,7 +681,7 @@ void CSkins::LoadSkinTextures(const CImageInfo &Info, const CImageInfo &InfoGray
 	}
 }
 
-std::shared_ptr<CSkinAnimation> CSkins::LoadSkinAnimationFinish(const CSkinLoadData &Data)
+std::shared_ptr<CSkinAnimation> CSkins::LoadSkinAnimationFinish(const char *pName, const CSkinLoadData &Data)
 {
 	if(Data.m_vAnimFrames.size() < 2)
 	{
@@ -693,6 +695,17 @@ std::shared_ptr<CSkinAnimation> CSkins::LoadSkinAnimationFinish(const CSkinLoadD
 		LoadSkinTextures(FrameData.m_Info, FrameData.m_InfoGrayscale, Frame.m_OriginalSkin, Frame.m_ColorableSkin);
 		Frame.m_DurationMs = FrameData.m_DurationMs;
 		pAnimation->AddFrame(std::move(Frame));
+	}
+	{
+		char aDurations[512] = "";
+		for(const CSkinAnimation::CFrame &Frame : pAnimation->m_vFrames)
+		{
+			char aDuration[16];
+			str_format(aDuration, sizeof(aDuration), "%s%d", aDurations[0] == '\0' ? "" : " ", Frame.m_DurationMs);
+			str_append(aDurations, aDuration);
+		}
+		log_debug("skins", "Loaded animation of skin '%s' with %d frames of %dx%d, durations (ms): %s", pName, (int)pAnimation->m_vFrames.size(),
+			(int)Data.m_vAnimFrames.front().m_Info.m_Width, (int)Data.m_vAnimFrames.front().m_Info.m_Height, aDurations);
 	}
 	return pAnimation;
 }
@@ -715,7 +728,7 @@ void CSkins::LoadSkinFinish(CSkinContainer *pSkinContainer, const CSkinLoadData 
 	CSkin Skin{pSkinContainer->Name()};
 
 	LoadSkinTextures(Data.m_Info, Data.m_InfoGrayscale, Skin.m_OriginalSkin, Skin.m_ColorableSkin); // bestclient
-	Skin.m_pAnimation = LoadSkinAnimationFinish(Data); // bestclient
+	Skin.m_pAnimation = LoadSkinAnimationFinish(pSkinContainer->Name(), Data); // bestclient
 	pSkinContainer->m_LocalAnimation = Data.m_LocalAnimation; // bestclient
 
 	Skin.m_Metrics = Data.m_Metrics;
@@ -870,7 +883,7 @@ void CSkins::UpdateAnimSkinDownloads()
 				{
 					pSkinContainer->m_pSkin->m_pAnimation->Unload(Graphics());
 				}
-				pSkinContainer->m_pSkin->m_pAnimation = LoadSkinAnimationFinish(pJob->m_Data);
+				pSkinContainer->m_pSkin->m_pAnimation = LoadSkinAnimationFinish(pSkinContainer->Name(), pJob->m_Data);
 				m_Revision++;
 				GameClient()->OnSkinUpdate(pSkinContainer->Name());
 			}

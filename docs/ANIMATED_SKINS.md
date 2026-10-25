@@ -8,11 +8,13 @@ The skin name sent to the server does not change, so players without BestClient 
 
 | Format | File | Notes |
 | --- | --- | --- |
-| GIF | `skins/<name>.gif` | 1-bit transparency only |
 | APNG | `skins/<name>.apng` or `skins/<name>.png` | full alpha, recommended |
-| WebP | `skins/<name>.webp` | needs FFmpeg 8.0 or newer |
+| GIF | `skins/<name>.gif` | 1-bit transparency only, edges look jagged |
+| WebP | `skins/<name>.webp` | needs an FFmpeg with the animated WebP decoder (8.0 or newer) |
 
-Decoding uses FFmpeg, so builds without `VIDEORECORDER` only show static skins.
+APNGs are decoded with libpng and work in every build. GIF and WebP are decoded with FFmpeg, so builds without `VIDEORECORDER` only support APNG.
+
+Frame durations are used exactly as stored in the file. Like in browsers, delays of 10 ms or less are shown for 100 ms.
 
 If both `<name>.png` and an animated file exist, the PNG is used in places that never animate and the animation is played on tees. A skin can also exist only as an animated file, then its first frame is used as the static skin.
 
@@ -21,7 +23,7 @@ If both `<name>.png` and an animated file exist, the PNG is used in places that 
 Every frame is uploaded as 24 small textures (12 skin parts, original and colorable), so animations are limited:
 
 - `bc_anim_skins` (default `1`): play animated skins at all.
-- `bc_anim_skins_max_frames` (default `32`): longer animations are reduced by merging neighbouring frames.
+- `bc_anim_skins_max_frames` (default `100`): longer animations are reduced by skipping frames evenly, the total duration stays the same.
 - `bc_anim_skins_max_width` (default `256`): frames are downscaled to this width.
 - `bc_anim_skins_max_duration` (default `15000` ms): longer animations only show their first frame.
 

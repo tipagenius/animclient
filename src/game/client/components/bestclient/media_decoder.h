@@ -47,6 +47,8 @@ struct SMediaDecodeLimits
 	size_t m_MaxTotalBytes = 64ull * 1024ull * 1024ull;
 	int m_MaxAnimationDurationMs = 0;
 	bool m_DecodeAllFrames = false;
+	// Use the frame durations from the file as they are (like browsers), without the smoothing heuristics for chat media
+	bool m_ExactTiming = false;
 };
 
 namespace MediaDecoder

@@ -385,7 +385,7 @@ private:
 	bool DecodeAnimatedSkin(const char *pName, const unsigned char *pData, size_t DataSize, CSkinLoadData &Data) const;
 	void LoadLocalAnimatedSkin(const char *pName, bool Cached, const unsigned char *pPngData, size_t PngSize, CSkinLoadData &Data) const;
 	void LoadSkinTextures(const CImageInfo &Info, const CImageInfo &InfoGrayscale, CSkin::CSkinTextures &OriginalSkin, CSkin::CSkinTextures &ColorableSkin);
-	std::shared_ptr<CSkinAnimation> LoadSkinAnimationFinish(const CSkinLoadData &Data);
+	std::shared_ptr<CSkinAnimation> LoadSkinAnimationFinish(const char *pName, const CSkinLoadData &Data);
 	static void UnloadSkin(IGraphics *pGraphics, CSkin &Skin);
 	void UpdateAnimSkinDownloads();
 	static void AbortAnimSkinDownload(CSkinContainer &SkinContainer);
