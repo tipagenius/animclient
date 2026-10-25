@@ -92,7 +92,7 @@ void CPlayers::RenderHand7(const CTeeRenderInfo *pInfo, vec2 HandPos, float Hand
 
 void CPlayers::RenderHand6(const CTeeRenderInfo *pInfo, vec2 HandPos, float HandAngle, float Alpha)
 {
-	const CSkin::CSkinTextures *pSkinTextures = pInfo->m_CustomColoredSkin ? &pInfo->m_ColorableRenderSkin : &pInfo->m_OriginalRenderSkin;
+	const CSkin::CSkinTextures *pSkinTextures = pInfo->SkinTextures(); // bestclient
 
 	if(!g_Config.m_TcRainbowTees) // TClient
 		Graphics()->SetColor(pInfo->m_ColorBody.WithAlpha(Alpha));

@@ -11,6 +11,13 @@
 MACRO_CONFIG_STR(BcFrozenSkin, bc_frozen_skin, 24, "", CFGFLAG_CLIENT | CFGFLAG_SAVE | CFGFLAG_INSENSITIVE, "Skin to show on frozen players, empty keeps the default behavior")
 MACRO_CONFIG_INT(BcFrozenSkinDarken, bc_frozen_skin_darken, 0, 0, 70, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Darken the frozen skin override (0 - normal, 70 - max darkened)")
 
+// Animated skins
+MACRO_CONFIG_INT(BcAnimSkins, bc_anim_skins, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Play animated skins (GIF/APNG/WebP)")
+MACRO_CONFIG_INT(BcAnimSkinsMaxFrames, bc_anim_skins_max_frames, 32, 2, 128, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum number of frames of an animated skin, longer animations are reduced")
+MACRO_CONFIG_INT(BcAnimSkinsMaxWidth, bc_anim_skins_max_width, 256, 64, 1024, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum width of animated skin frames in pixels, larger frames are downscaled")
+MACRO_CONFIG_INT(BcAnimSkinsMaxDuration, bc_anim_skins_max_duration, 15000, 1000, 60000, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum duration of an animated skin in milliseconds, longer animations only show the first frame")
+MACRO_CONFIG_STR(BcAnimSkinsDownloadUrl, bc_anim_skins_download_url, 128, "", CFGFLAG_CLIENT | CFGFLAG_SAVE, "URL used to download animated skins (file name is the skin name without extension), empty to disable")
+
 // SettingsTabs
 MACRO_CONFIG_INT(BcBestClientSettingsTabs, bc_bestclient_settings_tabs, 0, 0, 65536, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Bit flags to disable BestClient settings tabs") // bestclient
 

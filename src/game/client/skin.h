@@ -6,6 +6,11 @@
 #include <engine/graphics.h>
 #include <engine/shared/protocol.h>
 
+#include <memory>
+#include <vector>
+
+class CSkinAnimation;
+
 // do this better and nicer
 class CSkin
 {
@@ -33,6 +38,12 @@ public:
 	CSkinTextures m_OriginalSkin;
 	CSkinTextures m_ColorableSkin;
 	ColorRGBA m_BloodColor;
+
+	/**
+	 * Frames of an animated skin (GIF/APNG/WebP), nullptr for static skins. // bestclient
+	 * The first frame is also stored in @link m_OriginalSkin @endlink and @link m_ColorableSkin @endlink.
+	 */
+	std::shared_ptr<CSkinAnimation> m_pAnimation;
 
 	class CSkinMetricVariableInt
 	{
@@ -98,5 +109,35 @@ public:
 	static bool IsValidName(const char *pName);
 	static const char m_aSkinNameRestrictions[];
 };
+
+// bestclient
+class CSkinAnimation
+{
+public:
+	class CFrame
+	{
+	public:
+		CSkin::CSkinTextures m_OriginalSkin;
+		CSkin::CSkinTextures m_ColorableSkin;
+		int m_DurationMs = 0;
+	};
+
+	std::vector<CFrame> m_vFrames;
+
+	/**
+	 * Adds a frame, durations are clamped to a sane range.
+	 */
+	void AddFrame(CFrame &&Frame);
+	/**
+	 * The frame that should be displayed right now, nullptr if the animation is unloaded or animated skins are disabled.
+	 * All tees with the same skin are synchronized because the global clock is used.
+	 */
+	const CFrame *CurrentFrame() const;
+	void Unload(IGraphics *pGraphics);
+
+private:
+	int64_t m_TotalDurationMs = 0;
+};
+// bestclient
 
 #endif

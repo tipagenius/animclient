@@ -35,6 +35,27 @@ private:
 		CImageInfo m_InfoGrayscale;
 		CSkin::CSkinMetrics m_Metrics;
 		ColorRGBA m_BloodColor;
+
+		// bestclient
+		class CAnimFrameData
+		{
+		public:
+			CImageInfo m_Info;
+			CImageInfo m_InfoGrayscale;
+			int m_DurationMs = 0;
+		};
+		/**
+		 * Frames of an animated skin, empty for static skins.
+		 */
+		std::vector<CAnimFrameData> m_vAnimFrames;
+		/**
+		 * Whether the animation was loaded from the skins folder, in which case it is not downloaded.
+		 */
+		bool m_LocalAnimation = false;
+
+		void FreeAnimFrames();
+		void Free();
+		// bestclient
 	};
 
 	/**
@@ -53,6 +74,8 @@ private:
 		CSkins *m_pSkins;
 		char m_aName[MAX_SKIN_LENGTH];
 	};
+
+	class CAnimSkinDownloadJob; // bestclient
 
 public:
 	/**
@@ -140,6 +163,8 @@ public:
 		EState m_State = EState::UNLOADED;
 		std::unique_ptr<CSkin> m_pSkin = nullptr;
 		std::shared_ptr<CAbstractSkinLoadJob> m_pLoadJob = nullptr;
+		std::shared_ptr<CAnimSkinDownloadJob> m_pAnimDownloadJob = nullptr; // bestclient
+		bool m_LocalAnimation = false; // bestclient
 
 		/**
 		 * The time when loading of this skin was first requested.
@@ -287,6 +312,31 @@ private:
 		bool m_Cached;
 	};
 
+	// bestclient
+	/**
+	 * Downloads the animated version of a skin from @link CConfig::m_BcAnimSkinsDownloadUrl @endlink.
+	 */
+	class CAnimSkinDownloadJob : public IJob
+	{
+	public:
+		CAnimSkinDownloadJob(CSkins *pSkins, const char *pName);
+		~CAnimSkinDownloadJob() override;
+
+		bool Abort() override REQUIRES(!m_Lock);
+
+		CSkinLoadData m_Data;
+
+	protected:
+		void Run() override REQUIRES(!m_Lock);
+
+	private:
+		CSkins *m_pSkins;
+		char m_aName[MAX_SKIN_LENGTH];
+		CLock m_Lock;
+		std::shared_ptr<IHttpRequest> m_pGetRequest GUARDED_BY(m_Lock);
+	};
+	// bestclient
+
 	class CSkinDownloadJob : public CAbstractSkinLoadJob
 	{
 	public:
@@ -322,6 +372,24 @@ private:
 
 	bool LoadSkinData(const char *pName, CSkinLoadData &Data) const;
 	void LoadSkinFinish(CSkinContainer *pSkinContainer, const CSkinLoadData &Data);
+
+	// bestclient
+	/**
+	 * Names of skins whose animated version was already requested from the download URL in this session.
+	 */
+	std::set<std::string> m_AnimSkinsRequested;
+
+	bool PrepareSkinImage(const char *pName, CImageInfo &Info, size_t MaxWidth) const;
+	static void CreateColorableImage(const CImageInfo &Info, CImageInfo &InfoGrayscale);
+	void PrepareAnimFrames(const char *pName, CSkinLoadData &Data) const;
+	bool DecodeAnimatedSkin(const char *pName, const unsigned char *pData, size_t DataSize, CSkinLoadData &Data) const;
+	void LoadLocalAnimatedSkin(const char *pName, bool Cached, const unsigned char *pPngData, size_t PngSize, CSkinLoadData &Data) const;
+	void LoadSkinTextures(const CImageInfo &Info, const CImageInfo &InfoGrayscale, CSkin::CSkinTextures &OriginalSkin, CSkin::CSkinTextures &ColorableSkin);
+	std::shared_ptr<CSkinAnimation> LoadSkinAnimationFinish(const CSkinLoadData &Data);
+	static void UnloadSkin(IGraphics *pGraphics, CSkin &Skin);
+	void UpdateAnimSkinDownloads();
+	static void AbortAnimSkinDownload(CSkinContainer &SkinContainer);
+	// bestclient
 	void LoadSkinDirect(const char *pName);
 	const CSkinContainer *FindContainerImpl(const char *pName);
 	static int SkinScan(const char *pName, int IsDir, int StorageType, void *pUser);

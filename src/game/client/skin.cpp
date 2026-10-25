@@ -1,6 +1,9 @@
 #include "skin.h"
 
 #include <base/str.h>
+#include <base/time.h>
+
+#include <engine/shared/config.h>
 
 #include <algorithm>
 #include <limits>
@@ -143,3 +146,47 @@ bool CSkin::IsValidName(const char *pName)
 }
 
 const char CSkin::m_aSkinNameRestrictions[] = "Skin names must be valid filenames shorter than 24 characters.";
+
+// bestclient
+void CSkinAnimation::AddFrame(CFrame &&Frame)
+{
+	// same limits as the media decoder: at most 120 fps, at most 10 seconds per frame
+	Frame.m_DurationMs = std::clamp(Frame.m_DurationMs, 9, 10000);
+	m_TotalDurationMs += Frame.m_DurationMs;
+	m_vFrames.push_back(std::move(Frame));
+}
+
+const CSkinAnimation::CFrame *CSkinAnimation::CurrentFrame() const
+{
+	if(m_vFrames.empty() || !g_Config.m_BcAnimSkins)
+	{
+		return nullptr;
+	}
+	if(m_vFrames.size() == 1 || m_TotalDurationMs <= 0)
+	{
+		return &m_vFrames.front();
+	}
+
+	int64_t Offset = (time_get() / (time_freq() / 1000)) % m_TotalDurationMs;
+	for(const CFrame &Frame : m_vFrames)
+	{
+		if(Offset < Frame.m_DurationMs)
+		{
+			return &Frame;
+		}
+		Offset -= Frame.m_DurationMs;
+	}
+	return &m_vFrames.back();
+}
+
+void CSkinAnimation::Unload(IGraphics *pGraphics)
+{
+	for(CFrame &Frame : m_vFrames)
+	{
+		Frame.m_OriginalSkin.Unload(pGraphics);
+		Frame.m_ColorableSkin.Unload(pGraphics);
+	}
+	m_vFrames.clear();
+	m_TotalDurationMs = 0;
+}
+// bestclient

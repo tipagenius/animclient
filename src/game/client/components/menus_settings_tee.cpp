@@ -31,7 +31,7 @@ void CMenus::RenderSettingsTee(CUIRect MainView)
 	const float NameClanSkinHeight = 3.0f * 20.0f + 2.0f * 5.0f;
 	const float CustomColorsRowHeight = 20.0f;
 	const float LeftStackHeight = NameClanSkinHeight + 5.0f + CustomColorsRowHeight;
-	const float CheckboxesHeight = 4.0f * 20.0f;
+	const float CheckboxesHeight = 5.0f * 20.0f;
 	const float QualitySliderHeight = 32.0f;
 	const float QualityWarningHeight = g_Config.m_ClSkinMaxWidth >= 4096 ? 42.0f : 0.0f;
 	const float MidStackHeight = CheckboxesHeight + 2.0f + QualitySliderHeight + QualityWarningHeight;
@@ -157,6 +157,14 @@ void CMenus::RenderSettingsTee(CUIRect MainView)
 	{
 		g_Config.m_ClFatSkins ^= 1;
 	}
+
+	Checkboxes.HSplitTop(20.0f, &Button, &Checkboxes); // bestclient
+	if(DoButton_CheckBox(&g_Config.m_BcAnimSkins, Localize("Animated skins"), g_Config.m_BcAnimSkins, &Button))
+	{
+		g_Config.m_BcAnimSkins ^= 1;
+		ShouldRefresh = true;
+	}
+	GameClient()->m_Tooltips.DoToolTip(&g_Config.m_BcAnimSkins, &Button, Localize("Play animated skins: put <skin>.gif, .apng or .webp into the skins folder"));
 
 	// Skin quality // bestclient
 	{

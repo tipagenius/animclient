@@ -73,6 +73,7 @@ public:
 	{
 		m_OriginalRenderSkin.Reset();
 		m_ColorableRenderSkin.Reset();
+		m_pSkinAnimation = nullptr; // bestclient
 		m_SkinMetrics.Reset();
 		m_CustomColoredSkin = false;
 		m_BloodColor = ColorRGBA(1.0f, 1.0f, 1.0f, 1.0f);
@@ -91,6 +92,7 @@ public:
 	{
 		m_OriginalRenderSkin = pSkin->m_OriginalSkin;
 		m_ColorableRenderSkin = pSkin->m_ColorableSkin;
+		m_pSkinAnimation = pSkin->m_pAnimation; // bestclient
 		m_BloodColor = pSkin->m_BloodColor;
 		m_SkinMetrics = pSkin->m_Metrics;
 	}
@@ -99,9 +101,27 @@ public:
 	{
 		m_OriginalRenderSkin = TeeRenderInfo.m_OriginalRenderSkin;
 		m_ColorableRenderSkin = TeeRenderInfo.m_ColorableRenderSkin;
+		m_pSkinAnimation = TeeRenderInfo.m_pSkinAnimation; // bestclient
 		m_BloodColor = TeeRenderInfo.m_BloodColor;
 		m_SkinMetrics = TeeRenderInfo.m_SkinMetrics;
 	}
+
+	// bestclient
+	/**
+	 * The textures that should be used for rendering right now, takes the current frame of animated skins into account.
+	 */
+	const CSkin::CSkinTextures *SkinTextures() const
+	{
+		if(m_pSkinAnimation)
+		{
+			if(const CSkinAnimation::CFrame *pFrame = m_pSkinAnimation->CurrentFrame())
+			{
+				return m_CustomColoredSkin ? &pFrame->m_ColorableSkin : &pFrame->m_OriginalSkin;
+			}
+		}
+		return m_CustomColoredSkin ? &m_ColorableRenderSkin : &m_OriginalRenderSkin;
+	}
+	// bestclient
 
 	void ApplyColors(bool CustomColoredSkin, int ColorBody, int ColorFeet)
 	{
@@ -120,6 +140,7 @@ public:
 
 	CSkin::CSkinTextures m_OriginalRenderSkin;
 	CSkin::CSkinTextures m_ColorableRenderSkin;
+	std::shared_ptr<const CSkinAnimation> m_pSkinAnimation; // bestclient
 
 	CSkin::CSkinMetrics m_SkinMetrics;
 

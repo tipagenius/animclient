@@ -18,6 +18,7 @@
 
 #include <generated/client_data.h>
 
+#include <game/client/components/bestclient/media_decoder.h>
 #include <game/client/gameclient.h>
 #include <game/localization.h>
 
@@ -34,9 +35,23 @@ CSkins::CAbstractSkinLoadJob::CAbstractSkinLoadJob(CSkins *pSkins, const char *p
 
 CSkins::CAbstractSkinLoadJob::~CAbstractSkinLoadJob()
 {
-	m_Data.m_Info.Free();
-	m_Data.m_InfoGrayscale.Free();
+	m_Data.Free();
 }
+
+// bestclient
+void CSkins::CSkinLoadData::FreeAnimFrames()
+{
+	m_vAnimFrames.clear();
+	m_LocalAnimation = false;
+}
+
+void CSkins::CSkinLoadData::Free()
+{
+	m_Info.Free();
+	m_InfoGrayscale.Free();
+	FreeAnimFrames();
+}
+// bestclient
 
 CSkins::CSkinLoadJob::CSkinLoadJob(CSkins *pSkins, const char *pName, int StorageType, bool Cached) :
 	CAbstractSkinLoadJob(pSkins, pName),
@@ -61,6 +76,10 @@ CSkins::CSkinContainer::CSkinContainer(CSkins *pSkins, const char *pName, EType 
 CSkins::CSkinContainer::~CSkinContainer()
 {
 	dbg_assert(m_pLoadJob == nullptr, "Skin container load job was not cleared");
+	if(m_pAnimDownloadJob) // bestclient
+	{
+		m_pAnimDownloadJob->Abort();
+	}
 }
 
 bool CSkins::CSkinContainer::operator<(const CSkinContainer &Other) const
@@ -243,6 +262,17 @@ int CSkins::SkinScan(const char *pName, int IsDir, int StorageType, void *pUser)
 	}
 
 	const char *pSuffix = str_endswith(pName, ".png");
+	if(pSuffix == nullptr && !pUserReal->m_CachedSkins) // bestclient: skins can also be only animated
+	{
+		for(const char *pExtension : {".gif", ".apng", ".webp"})
+		{
+			pSuffix = str_endswith_nocase(pName, pExtension);
+			if(pSuffix != nullptr)
+			{
+				break;
+			}
+		}
+	}
 	if(pSuffix == nullptr)
 	{
 		return 0;
@@ -305,44 +335,110 @@ static void CheckMetrics(CSkin::CSkinMetricVariable &Metrics, const uint8_t *pIm
 	Metrics.m_MaxHeight = CheckHeight;
 }
 
-bool CSkins::LoadSkinData(const char *pName, CSkinLoadData &Data) const
+bool CSkins::PrepareSkinImage(const char *pName, CImageInfo &Info, size_t MaxWidth) const
 {
 	const int DivX = g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridx; // bestclient
 	const int DivY = g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridy; // bestclient
-	if(!Graphics()->CheckImageDivisibility(pName, Data.m_Info, DivX, DivY, true))
+	if(!Graphics()->CheckImageDivisibility(pName, Info, DivX, DivY, true))
 	{
 		log_error("skins", "Skin failed image divisibility: %s", pName);
-		Data.m_Info.Free();
+		Info.Free();
 		return false;
 	}
-	if(!Graphics()->IsImageFormatRgba(pName, Data.m_Info))
+	if(!Graphics()->IsImageFormatRgba(pName, Info))
 	{
 		log_error("skins", "Skin format is not RGBA: %s", pName);
-		Data.m_Info.Free();
+		Info.Free();
 		return false;
 	}
 	// Downscale oversized skins before uploading dozens of sprite textures to the GPU. // bestclient
-	const size_t MaxWidth = (size_t)g_Config.m_ClSkinMaxWidth;
-	if(Data.m_Info.m_Width > MaxWidth && DivX > 0 && DivY > 0)
+	if(Info.m_Width > MaxWidth && DivX > 0 && DivY > 0)
 	{
 		size_t NewWidth = (MaxWidth / (size_t)DivX) * (size_t)DivX;
-		size_t NewHeight = (NewWidth * Data.m_Info.m_Height) / Data.m_Info.m_Width;
+		size_t NewHeight = (NewWidth * Info.m_Height) / Info.m_Width;
 		NewHeight = (NewHeight / (size_t)DivY) * (size_t)DivY;
 		if(NewWidth >= (size_t)DivX && NewHeight >= (size_t)DivY &&
-			(NewWidth < Data.m_Info.m_Width || NewHeight < Data.m_Info.m_Height))
+			(NewWidth < Info.m_Width || NewHeight < Info.m_Height))
 		{
-			log_info("skins", "Downscaling skin '%s' from %" PRIzu "x%" PRIzu " to %" PRIzu "x%" PRIzu " (cl_skin_max_width %" PRIzu ")",
-				pName, Data.m_Info.m_Width, Data.m_Info.m_Height, NewWidth, NewHeight, MaxWidth);
-			ResizeImage(Data.m_Info, NewWidth, NewHeight);
+			log_info("skins", "Downscaling skin '%s' from %" PRIzu "x%" PRIzu " to %" PRIzu "x%" PRIzu " (max width %" PRIzu ")",
+				pName, Info.m_Width, Info.m_Height, NewWidth, NewHeight, MaxWidth);
+			ResizeImage(Info, NewWidth, NewHeight);
 		}
 	} // bestclient
 
-	const size_t BodyWidth = g_pData->m_aSprites[SPRITE_TEE_BODY].m_W * (Data.m_Info.m_Width / (size_t)DivX);
-	const size_t BodyHeight = g_pData->m_aSprites[SPRITE_TEE_BODY].m_H * (Data.m_Info.m_Height / (size_t)DivY);
-	if(BodyWidth > Data.m_Info.m_Width || BodyHeight > Data.m_Info.m_Height)
+	const size_t BodyWidth = g_pData->m_aSprites[SPRITE_TEE_BODY].m_W * (Info.m_Width / (size_t)DivX);
+	const size_t BodyHeight = g_pData->m_aSprites[SPRITE_TEE_BODY].m_H * (Info.m_Height / (size_t)DivY);
+	if(BodyWidth > Info.m_Width || BodyHeight > Info.m_Height)
 	{
-		log_error("skins", "Skin size unsupported (w=%" PRIzu ", h=%" PRIzu "): %s", Data.m_Info.m_Width, Data.m_Info.m_Height, pName);
-		Data.m_Info.Free();
+		log_error("skins", "Skin size unsupported (w=%" PRIzu ", h=%" PRIzu "): %s", Info.m_Width, Info.m_Height, pName);
+		Info.Free();
+		return false;
+	}
+	return true;
+}
+
+void CSkins::CreateColorableImage(const CImageInfo &Info, CImageInfo &InfoGrayscale)
+{
+	const size_t BodyWidth = g_pData->m_aSprites[SPRITE_TEE_BODY].m_W * (Info.m_Width / (size_t)g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridx);
+	const size_t BodyHeight = g_pData->m_aSprites[SPRITE_TEE_BODY].m_H * (Info.m_Height / (size_t)g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridy);
+	const size_t PixelStep = Info.PixelSize();
+	const size_t Pitch = Info.m_Width * PixelStep;
+
+	InfoGrayscale = Info.DeepCopy();
+	ConvertToGrayscale(InfoGrayscale);
+
+	int aFreq[256] = {0};
+	uint8_t OrgWeight = 1;
+	uint8_t NewWeight = 192;
+
+	// find most common non-zero frequency
+	for(size_t y = 0; y < BodyHeight; y++)
+	{
+		for(size_t x = 0; x < BodyWidth; x++)
+		{
+			const size_t Offset = y * Pitch + x * PixelStep;
+			if(InfoGrayscale.m_pData[Offset + 3] > 128)
+			{
+				aFreq[InfoGrayscale.m_pData[Offset]]++;
+			}
+		}
+	}
+
+	for(int i = 1; i < 256; i++)
+	{
+		if(aFreq[OrgWeight] < aFreq[i])
+		{
+			OrgWeight = i;
+		}
+	}
+
+	// reorder
+	for(size_t y = 0; y < BodyHeight; y++)
+	{
+		for(size_t x = 0; x < BodyWidth; x++)
+		{
+			const size_t Offset = y * Pitch + x * PixelStep;
+			uint8_t v = InfoGrayscale.m_pData[Offset];
+			if(v <= OrgWeight)
+			{
+				v = (uint8_t)((v / (float)OrgWeight) * NewWeight);
+			}
+			else
+			{
+				v = (uint8_t)(((v - OrgWeight) / (float)(255 - OrgWeight)) * (255 - NewWeight) + NewWeight);
+			}
+			InfoGrayscale.m_pData[Offset] = v;
+			InfoGrayscale.m_pData[Offset + 1] = v;
+			InfoGrayscale.m_pData[Offset + 2] = v;
+		}
+	}
+}
+
+bool CSkins::LoadSkinData(const char *pName, CSkinLoadData &Data) const
+{
+	if(!PrepareSkinImage(pName, Data.m_Info, (size_t)g_Config.m_ClSkinMaxWidth))
+	{
+		Data.FreeAnimFrames();
 		return false;
 	}
 
@@ -367,6 +463,8 @@ bool CSkins::LoadSkinData(const char *pName, CSkinLoadData &Data) const
 	int BodyOutlineOffsetX = g_pData->m_aSprites[SPRITE_TEE_BODY_OUTLINE].m_X * BodyOutlineGridPixelsWidth;
 	int BodyOutlineOffsetY = g_pData->m_aSprites[SPRITE_TEE_BODY_OUTLINE].m_Y * BodyOutlineGridPixelsHeight;
 
+	const size_t BodyWidth = g_pData->m_aSprites[SPRITE_TEE_BODY].m_W * (Data.m_Info.m_Width / (size_t)g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridx);
+	const size_t BodyHeight = g_pData->m_aSprites[SPRITE_TEE_BODY].m_H * (Data.m_Info.m_Height / (size_t)g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridy);
 	const size_t PixelStep = Data.m_Info.PixelSize();
 	const size_t Pitch = Data.m_Info.m_Width * PixelStep;
 
@@ -397,84 +495,228 @@ bool CSkins::LoadSkinData(const char *pName, CSkinLoadData &Data) const
 	CheckMetrics(Data.m_Metrics.m_Feet, Data.m_Info.m_pData, Pitch, FeetOffsetX, FeetOffsetY, FeetWidth, FeetHeight);
 	CheckMetrics(Data.m_Metrics.m_Feet, Data.m_Info.m_pData, Pitch, FeetOutlineOffsetX, FeetOutlineOffsetY, FeetOutlineWidth, FeetOutlineHeight);
 
-	Data.m_InfoGrayscale = Data.m_Info.DeepCopy();
-	ConvertToGrayscale(Data.m_InfoGrayscale);
+	CreateColorableImage(Data.m_Info, Data.m_InfoGrayscale);
 
-	int aFreq[256] = {0};
-	uint8_t OrgWeight = 1;
-	uint8_t NewWeight = 192;
-
-	// find most common non-zero frequency
-	for(size_t y = 0; y < BodyHeight; y++)
-	{
-		for(size_t x = 0; x < BodyWidth; x++)
-		{
-			const size_t Offset = y * Pitch + x * PixelStep;
-			if(Data.m_InfoGrayscale.m_pData[Offset + 3] > 128)
-			{
-				aFreq[Data.m_InfoGrayscale.m_pData[Offset]]++;
-			}
-		}
-	}
-
-	for(int i = 1; i < 256; i++)
-	{
-		if(aFreq[OrgWeight] < aFreq[i])
-		{
-			OrgWeight = i;
-		}
-	}
-
-	// reorder
-	for(size_t y = 0; y < BodyHeight; y++)
-	{
-		for(size_t x = 0; x < BodyWidth; x++)
-		{
-			const size_t Offset = y * Pitch + x * PixelStep;
-			uint8_t v = Data.m_InfoGrayscale.m_pData[Offset];
-			if(v <= OrgWeight)
-			{
-				v = (uint8_t)((v / (float)OrgWeight) * NewWeight);
-			}
-			else
-			{
-				v = (uint8_t)(((v - OrgWeight) / (float)(255 - OrgWeight)) * (255 - NewWeight) + NewWeight);
-			}
-			Data.m_InfoGrayscale.m_pData[Offset] = v;
-			Data.m_InfoGrayscale.m_pData[Offset + 1] = v;
-			Data.m_InfoGrayscale.m_pData[Offset + 2] = v;
-		}
-	}
-
+	PrepareAnimFrames(pName, Data); // bestclient
 	return true;
 }
+
+// bestclient
+void CSkins::PrepareAnimFrames(const char *pName, CSkinLoadData &Data) const
+{
+	if(Data.m_vAnimFrames.empty())
+	{
+		return;
+	}
+
+	const int DivX = g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridx;
+	const int DivY = g_pData->m_aSprites[SPRITE_TEE_BODY].m_pSet->m_Gridy;
+	const size_t MaxWidth = (size_t)std::min(g_Config.m_ClSkinMaxWidth, g_Config.m_BcAnimSkinsMaxWidth);
+	char aContextName[64];
+	str_format(aContextName, sizeof(aContextName), "%s (animated)", pName);
+
+	std::vector<CSkinLoadData::CAnimFrameData> vFrames;
+	vFrames.reserve(Data.m_vAnimFrames.size());
+	for(CSkinLoadData::CAnimFrameData &Frame : Data.m_vAnimFrames)
+	{
+		// Snap the frame size to the skin grid ourselves, so we do not show a divisibility warning for every frame
+		const int SnappedWidth = std::max(DivX, round_to_int(Frame.m_Info.m_Width / (float)DivX) * DivX);
+		const int SnappedHeight = std::max(DivY, round_to_int(Frame.m_Info.m_Height / (float)DivY) * DivY);
+		if((size_t)SnappedWidth != Frame.m_Info.m_Width || (size_t)SnappedHeight != Frame.m_Info.m_Height)
+		{
+			ResizeImage(Frame.m_Info, SnappedWidth, SnappedHeight);
+		}
+		if(!PrepareSkinImage(aContextName, Frame.m_Info, MaxWidth))
+		{
+			continue;
+		}
+		CreateColorableImage(Frame.m_Info, Frame.m_InfoGrayscale);
+		vFrames.push_back(std::move(Frame));
+	}
+
+	if(vFrames.size() < 2)
+	{
+		log_error("skins", "Animated skin '%s' has less than 2 valid frames", pName);
+		Data.FreeAnimFrames();
+		return;
+	}
+	Data.m_vAnimFrames = std::move(vFrames);
+}
+
+static bool IsAnimatedPng(const unsigned char *pData, size_t DataSize)
+{
+	static const unsigned char s_aPngSignature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+	if(pData == nullptr || DataSize < sizeof(s_aPngSignature) || mem_comp(pData, s_aPngSignature, sizeof(s_aPngSignature)) != 0)
+	{
+		return false;
+	}
+	// The acTL chunk marks an APNG and must appear before the first IDAT chunk
+	size_t Offset = sizeof(s_aPngSignature);
+	while(Offset + 8 <= DataSize)
+	{
+		const size_t ChunkLength = ((size_t)pData[Offset] << 24) | ((size_t)pData[Offset + 1] << 16) | ((size_t)pData[Offset + 2] << 8) | (size_t)pData[Offset + 3];
+		const unsigned char *pChunkType = pData + Offset + 4;
+		if(mem_comp(pChunkType, "acTL", 4) == 0)
+		{
+			return true;
+		}
+		if(mem_comp(pChunkType, "IDAT", 4) == 0)
+		{
+			return false;
+		}
+		Offset += 12 + ChunkLength; // length, type, data, crc
+	}
+	return false;
+}
+
+bool CSkins::DecodeAnimatedSkin(const char *pName, const unsigned char *pData, size_t DataSize, CSkinLoadData &Data) const
+{
+	SMediaDecodeLimits Limits;
+	Limits.m_MaxDimension = g_Config.m_BcAnimSkinsMaxWidth;
+	Limits.m_MaxFrames = g_Config.m_BcAnimSkinsMaxFrames;
+	Limits.m_MaxAnimationDurationMs = g_Config.m_BcAnimSkinsMaxDuration;
+
+	SMediaDecodedFrames DecodedFrames;
+	if(!MediaDecoder::DecodeAnimatedImageCpu(Graphics(), pData, DataSize, pName, DecodedFrames, Limits))
+	{
+		log_error("skins", "Failed to decode animated skin '%s'", pName);
+		return false;
+	}
+
+	Data.FreeAnimFrames();
+	if(!Data.m_Info.m_pData)
+	{
+		// Skin is only available as animation, use first frame as static skin
+		Data.m_Info = DecodedFrames.m_vFrames.front().m_Image.DeepCopy();
+	}
+	if(DecodedFrames.m_vFrames.size() < 2 || !g_Config.m_BcAnimSkins)
+	{
+		return true;
+	}
+	for(SMediaRawFrame &DecodedFrame : DecodedFrames.m_vFrames)
+	{
+		CSkinLoadData::CAnimFrameData Frame;
+		Frame.m_Info = std::move(DecodedFrame.m_Image);
+		Frame.m_DurationMs = DecodedFrame.m_DurationMs;
+		Data.m_vAnimFrames.push_back(std::move(Frame));
+	}
+	return true;
+}
+
+void CSkins::LoadLocalAnimatedSkin(const char *pName, bool Cached, const unsigned char *pPngData, size_t PngSize, CSkinLoadData &Data) const
+{
+	Data.FreeAnimFrames();
+	if(!g_Config.m_BcAnimSkins && Data.m_Info.m_pData)
+	{
+		return;
+	}
+
+	// APNG stored with the regular .png extension
+	if(IsAnimatedPng(pPngData, PngSize) && DecodeAnimatedSkin(pName, pPngData, PngSize, Data) && !Data.m_vAnimFrames.empty())
+	{
+		Data.m_LocalAnimation = !Cached;
+		return;
+	}
+
+	const auto &&TryLoadFile = [&](const char *pPath, int StorageType) {
+		void *pFileData;
+		unsigned FileSize;
+		if(!Storage()->ReadFile(pPath, StorageType, &pFileData, &FileSize))
+		{
+			return false;
+		}
+		const bool Success = DecodeAnimatedSkin(pName, static_cast<const unsigned char *>(pFileData), FileSize, Data);
+		free(pFileData);
+		return Success;
+	};
+
+	char aPath[IO_MAX_PATH_LENGTH];
+	if(!Cached)
+	{
+		for(const char *pExtension : {"gif", "apng", "webp"})
+		{
+			str_format(aPath, sizeof(aPath), "skins/%s.%s", pName, pExtension);
+			if(TryLoadFile(aPath, IStorage::TYPE_ALL))
+			{
+				Data.m_LocalAnimation = true;
+				return;
+			}
+		}
+	}
+
+	if(g_Config.m_BcAnimSkinsDownloadUrl[0] != '\0')
+	{
+		str_format(aPath, sizeof(aPath), "downloadedskins/%s.anim", pName);
+		TryLoadFile(aPath, IStorage::TYPE_SAVE);
+	}
+}
+// bestclient
+
+// bestclient
+void CSkins::LoadSkinTextures(const CImageInfo &Info, const CImageInfo &InfoGrayscale, CSkin::CSkinTextures &OriginalSkin, CSkin::CSkinTextures &ColorableSkin)
+{
+	// people load the jankiest skins, so we ignore empty sprites
+	OriginalSkin.m_Body = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY]);
+	OriginalSkin.m_BodyOutline = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY_OUTLINE]);
+	OriginalSkin.m_Feet = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT]);
+	OriginalSkin.m_FeetOutline = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT_OUTLINE]);
+	OriginalSkin.m_Hands = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND]);
+	OriginalSkin.m_HandsOutline = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND_OUTLINE]);
+	for(size_t i = 0; i < std::size(OriginalSkin.m_aEyes); ++i)
+	{
+		OriginalSkin.m_aEyes[i] = Graphics()->LoadSpriteTexture(Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_EYE_NORMAL + i]);
+	}
+
+	ColorableSkin.m_Body = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY]);
+	ColorableSkin.m_BodyOutline = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY_OUTLINE]);
+	ColorableSkin.m_Feet = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT]);
+	ColorableSkin.m_FeetOutline = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT_OUTLINE]);
+	ColorableSkin.m_Hands = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND]);
+	ColorableSkin.m_HandsOutline = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND_OUTLINE]);
+	for(size_t i = 0; i < std::size(ColorableSkin.m_aEyes); ++i)
+	{
+		ColorableSkin.m_aEyes[i] = Graphics()->LoadSpriteTexture(InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_EYE_NORMAL + i]);
+	}
+}
+
+std::shared_ptr<CSkinAnimation> CSkins::LoadSkinAnimationFinish(const CSkinLoadData &Data)
+{
+	if(Data.m_vAnimFrames.size() < 2)
+	{
+		return nullptr;
+	}
+	auto pAnimation = std::make_shared<CSkinAnimation>();
+	pAnimation->m_vFrames.reserve(Data.m_vAnimFrames.size());
+	for(const CSkinLoadData::CAnimFrameData &FrameData : Data.m_vAnimFrames)
+	{
+		CSkinAnimation::CFrame Frame;
+		LoadSkinTextures(FrameData.m_Info, FrameData.m_InfoGrayscale, Frame.m_OriginalSkin, Frame.m_ColorableSkin);
+		Frame.m_DurationMs = FrameData.m_DurationMs;
+		pAnimation->AddFrame(std::move(Frame));
+	}
+	return pAnimation;
+}
+
+void CSkins::UnloadSkin(IGraphics *pGraphics, CSkin &Skin)
+{
+	Skin.m_OriginalSkin.Unload(pGraphics);
+	Skin.m_ColorableSkin.Unload(pGraphics);
+	if(Skin.m_pAnimation)
+	{
+		// render infos may still reference the animation, they fall back to the static textures
+		Skin.m_pAnimation->Unload(pGraphics);
+		Skin.m_pAnimation = nullptr;
+	}
+}
+// bestclient
 
 void CSkins::LoadSkinFinish(CSkinContainer *pSkinContainer, const CSkinLoadData &Data)
 {
 	CSkin Skin{pSkinContainer->Name()};
 
-	// people load the jankiest skins, so we ignore empty sprites
-	Skin.m_OriginalSkin.m_Body = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY]);
-	Skin.m_OriginalSkin.m_BodyOutline = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY_OUTLINE]);
-	Skin.m_OriginalSkin.m_Feet = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT]);
-	Skin.m_OriginalSkin.m_FeetOutline = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT_OUTLINE]);
-	Skin.m_OriginalSkin.m_Hands = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND]);
-	Skin.m_OriginalSkin.m_HandsOutline = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND_OUTLINE]);
-	for(size_t i = 0; i < std::size(Skin.m_OriginalSkin.m_aEyes); ++i)
-	{
-		Skin.m_OriginalSkin.m_aEyes[i] = Graphics()->LoadSpriteTexture(Data.m_Info, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_EYE_NORMAL + i]);
-	}
-
-	Skin.m_ColorableSkin.m_Body = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY]);
-	Skin.m_ColorableSkin.m_BodyOutline = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_BODY_OUTLINE]);
-	Skin.m_ColorableSkin.m_Feet = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT]);
-	Skin.m_ColorableSkin.m_FeetOutline = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_FOOT_OUTLINE]);
-	Skin.m_ColorableSkin.m_Hands = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND]);
-	Skin.m_ColorableSkin.m_HandsOutline = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_HAND_OUTLINE]);
-	for(size_t i = 0; i < std::size(Skin.m_ColorableSkin.m_aEyes); ++i)
-	{
-		Skin.m_ColorableSkin.m_aEyes[i] = Graphics()->LoadSpriteTexture(Data.m_InfoGrayscale, std::nullopt, &g_pData->m_aSprites[SPRITE_TEE_EYE_NORMAL + i]);
-	}
+	LoadSkinTextures(Data.m_Info, Data.m_InfoGrayscale, Skin.m_OriginalSkin, Skin.m_ColorableSkin); // bestclient
+	Skin.m_pAnimation = LoadSkinAnimationFinish(Data); // bestclient
+	pSkinContainer->m_LocalAnimation = Data.m_LocalAnimation; // bestclient
 
 	Skin.m_Metrics = Data.m_Metrics;
 	Skin.m_BloodColor = Data.m_BloodColor;
@@ -580,7 +822,167 @@ void CSkins::OnUpdate()
 	UpdateUnloadSkins(Stats);
 	UpdateStartLoading(Stats);
 	UpdateFinishLoading(Stats, StartTime, std::chrono::microseconds(1500));
+	UpdateAnimSkinDownloads(); // bestclient
 }
+
+// bestclient
+void CSkins::AbortAnimSkinDownload(CSkinContainer &SkinContainer)
+{
+	if(!SkinContainer.m_pAnimDownloadJob)
+	{
+		return;
+	}
+	SkinContainer.m_pAnimDownloadJob->Abort();
+	SkinContainer.m_pAnimDownloadJob = nullptr;
+	// request it again when the skin is loaded the next time
+	SkinContainer.m_pSkins->m_AnimSkinsRequested.erase(SkinContainer.Name());
+}
+
+void CSkins::UpdateAnimSkinDownloads()
+{
+	constexpr size_t MAX_RUNNING_DOWNLOADS = 4;
+	const bool DownloadEnabled = g_Config.m_BcAnimSkins && g_Config.m_BcAnimSkinsDownloadUrl[0] != '\0';
+	size_t NumRunning = 0;
+	bool FinishedThisUpdate = false;
+
+	for(auto &[_, pSkinContainer] : m_Skins)
+	{
+		if(pSkinContainer->m_pAnimDownloadJob)
+		{
+			if(!pSkinContainer->m_pAnimDownloadJob->Done())
+			{
+				NumRunning++;
+				continue;
+			}
+			// upload at most one animation per update to avoid stutters
+			if(FinishedThisUpdate)
+			{
+				continue;
+			}
+			FinishedThisUpdate = true;
+			std::shared_ptr<CAnimSkinDownloadJob> pJob = std::exchange(pSkinContainer->m_pAnimDownloadJob, nullptr);
+			if(pJob->State() == IJob::STATE_DONE &&
+				pJob->m_Data.m_vAnimFrames.size() >= 2 &&
+				pSkinContainer->m_State == CSkinContainer::EState::LOADED &&
+				pSkinContainer->m_pSkin)
+			{
+				if(pSkinContainer->m_pSkin->m_pAnimation)
+				{
+					pSkinContainer->m_pSkin->m_pAnimation->Unload(Graphics());
+				}
+				pSkinContainer->m_pSkin->m_pAnimation = LoadSkinAnimationFinish(pJob->m_Data);
+				m_Revision++;
+				GameClient()->OnSkinUpdate(pSkinContainer->Name());
+			}
+			continue;
+		}
+
+		if(!DownloadEnabled ||
+			NumRunning >= MAX_RUNNING_DOWNLOADS ||
+			pSkinContainer->m_State != CSkinContainer::EState::LOADED ||
+			!pSkinContainer->m_pSkin ||
+			pSkinContainer->m_LocalAnimation ||
+			m_AnimSkinsRequested.contains(pSkinContainer->Name()))
+		{
+			continue;
+		}
+		m_AnimSkinsRequested.emplace(pSkinContainer->Name());
+		pSkinContainer->m_pAnimDownloadJob = std::make_shared<CAnimSkinDownloadJob>(this, pSkinContainer->Name());
+		Engine()->AddJob(pSkinContainer->m_pAnimDownloadJob);
+		NumRunning++;
+	}
+}
+
+CSkins::CAnimSkinDownloadJob::CAnimSkinDownloadJob(CSkins *pSkins, const char *pName) :
+	m_pSkins(pSkins)
+{
+	str_copy(m_aName, pName);
+	Abortable(true);
+}
+
+CSkins::CAnimSkinDownloadJob::~CAnimSkinDownloadJob()
+{
+	m_Data.Free();
+}
+
+bool CSkins::CAnimSkinDownloadJob::Abort()
+{
+	if(!IJob::Abort())
+	{
+		return false;
+	}
+
+	const CLockScope LockScope(m_Lock);
+	if(m_pGetRequest)
+	{
+		m_pGetRequest->Abort();
+		m_pGetRequest = nullptr;
+	}
+	return true;
+}
+
+void CSkins::CAnimSkinDownloadJob::Run()
+{
+	char aEscapedName[256];
+	EscapeUrl(aEscapedName, m_aName);
+
+	char aUrl[IO_MAX_PATH_LENGTH];
+	str_format(aUrl, sizeof(aUrl), "%s%s", g_Config.m_BcAnimSkinsDownloadUrl, aEscapedName);
+
+	char aPathReal[IO_MAX_PATH_LENGTH];
+	str_format(aPathReal, sizeof(aPathReal), "downloadedskins/%s.anim", m_aName);
+
+	std::shared_ptr<IHttpRequest> pGet = HttpGetBoth(aUrl, m_pSkins->Storage(), aPathReal, IStorage::TYPE_SAVE);
+	pGet->Timeout(CTimeout{10000, 0, 8192, 10});
+	pGet->MaxResponseSize(8 * 1024 * 1024); // 8 MiB
+	pGet->ValidateBeforeOverwrite(true);
+	pGet->LogProgress(HTTPLOG::NONE);
+	pGet->FailOnErrorStatus(false);
+	{
+		const CLockScope LockScope(m_Lock);
+		m_pGetRequest = pGet;
+	}
+	m_pSkins->Http()->Run(pGet);
+	pGet->Wait();
+	{
+		const CLockScope LockScope(m_Lock);
+		m_pGetRequest = nullptr;
+	}
+	if(pGet->State() != EHttpState::DONE || State() == IJob::STATE_ABORTED)
+	{
+		return;
+	}
+	if(pGet->StatusCode() == 404)
+	{
+		// the animation was removed, so we do not want to show the cached one anymore next time
+		m_pSkins->Storage()->RemoveFile(aPathReal, IStorage::TYPE_SAVE);
+		return;
+	}
+	if(pGet->StatusCode() >= 400)
+	{
+		return;
+	}
+	if(pGet->StatusCode() == 304) // 304 Not Modified, the cached animation was already loaded together with the skin
+	{
+		pGet->OnValidation(true);
+		return;
+	}
+
+	unsigned char *pResult;
+	size_t ResultSize;
+	pGet->Result(&pResult, &ResultSize);
+	m_Data.m_Info.Free();
+	const bool Success = m_pSkins->DecodeAnimatedSkin(m_aName, pResult, ResultSize, m_Data) && !m_Data.m_vAnimFrames.empty();
+	pGet->OnValidation(Success);
+	if(!Success || State() == IJob::STATE_ABORTED)
+	{
+		m_Data.FreeAnimFrames();
+		return;
+	}
+	m_pSkins->PrepareAnimFrames(m_aName, m_Data);
+	m_Data.m_Info.Free();
+}
+// bestclient
 
 void CSkins::UpdateUnloadSkins(CSkinLoadingStats &Stats)
 {
@@ -614,8 +1016,8 @@ void CSkins::UpdateUnloadSkins(CSkinLoadingStats &Stats)
 		}
 		if(pSkinContainer->m_State == CSkinContainer::EState::LOADED)
 		{
-			pSkinContainer->m_pSkin->m_OriginalSkin.Unload(Graphics());
-			pSkinContainer->m_pSkin->m_ColorableSkin.Unload(Graphics());
+			UnloadSkin(Graphics(), *pSkinContainer->m_pSkin); // bestclient
+			AbortAnimSkinDownload(*pSkinContainer); // bestclient
 			pSkinContainer->m_pSkin = nullptr;
 			m_Revision++;
 			Stats.m_NumLoaded--;
@@ -755,11 +1157,11 @@ void CSkins::Refresh(TSkinLoadedCallback &&SkinLoadedCallback)
 		}
 		if(pSkinContainer->m_pSkin)
 		{
-			pSkinContainer->m_pSkin->m_OriginalSkin.Unload(Graphics());
-			pSkinContainer->m_pSkin->m_ColorableSkin.Unload(Graphics());
+			UnloadSkin(Graphics(), *pSkinContainer->m_pSkin); // bestclient
 		}
 	}
 	m_Skins.clear();
+	m_AnimSkinsRequested.clear(); // bestclient
 	m_SkinsUsageList.clear();
 	m_vLocalSkins.clear();
 	m_LocalSkinListNeedsUpdate = true;
@@ -1092,17 +1494,32 @@ void CSkins::CSkinLoadJob::Run()
 {
 	char aPath[IO_MAX_PATH_LENGTH];
 	str_format(aPath, sizeof(aPath), "%s/%s.png", m_Cached ? "downloadedskins" : "skins", m_aName);
-	if(m_pSkins->Graphics()->LoadPng(m_Data.m_Info, aPath, m_StorageType))
-	{
-		if(State() == IJob::STATE_ABORTED)
-		{
-			return;
-		}
-		m_pSkins->LoadSkinData(m_aName, m_Data);
-	}
-	else
+	// bestclient: read the file ourselves, so APNGs can be detected without reading it twice
+	void *pPngData = nullptr;
+	unsigned PngSize = 0;
+	const bool PngFound = m_pSkins->Storage()->ReadFile(aPath, m_StorageType, &pPngData, &PngSize);
+	if(PngFound && !m_pSkins->Graphics()->LoadPng(m_Data.m_Info, static_cast<uint8_t *>(pPngData), PngSize, aPath))
 	{
 		log_error("skins", "Failed to load PNG of skin '%s' from '%s'", m_aName, aPath);
+	}
+	if(State() == IJob::STATE_ABORTED)
+	{
+		free(pPngData);
+		return;
+	}
+	m_pSkins->LoadLocalAnimatedSkin(m_aName, m_Cached, static_cast<const unsigned char *>(pPngData), PngSize, m_Data);
+	free(pPngData);
+	if(State() == IJob::STATE_ABORTED)
+	{
+		return;
+	}
+	if(m_Data.m_Info.m_pData)
+	{
+		m_pSkins->LoadSkinData(m_aName, m_Data);
+	}
+	else if(!PngFound)
+	{
+		log_error("skins", "Failed to load skin '%s', neither '%s' nor an animated version could be loaded", m_aName, aPath);
 	}
 }
 
@@ -1165,8 +1582,10 @@ void CSkins::CSkinDownloadJob::Run()
 			{
 				if(State() == IJob::STATE_ABORTED)
 				{
+					free(pPngData);
 					return;
 				}
+				m_pSkins->LoadLocalAnimatedSkin(m_aName, true, static_cast<const unsigned char *>(pPngData), PngSize, m_Data); // bestclient
 				m_pSkins->LoadSkinData(m_aName, m_Data);
 			}
 			free(pPngData);
@@ -1221,8 +1640,7 @@ void CSkins::CSkinDownloadJob::Run()
 	size_t ResultSize;
 	pGet->Result(&pResult, &ResultSize);
 
-	m_Data.m_Info.Free();
-	m_Data.m_InfoGrayscale.Free();
+	m_Data.Free(); // bestclient
 	const bool Success = m_pSkins->Graphics()->LoadPng(m_Data.m_Info, pResult, ResultSize, aUrl);
 	if(Success)
 	{
@@ -1230,6 +1648,7 @@ void CSkins::CSkinDownloadJob::Run()
 		{
 			return;
 		}
+		m_pSkins->LoadLocalAnimatedSkin(m_aName, true, pResult, ResultSize, m_Data); // bestclient
 		m_pSkins->LoadSkinData(m_aName, m_Data);
 	}
 	else

@@ -299,7 +299,7 @@ namespace MediaDecoder
 			Image.m_Width = SrcW;
 			Image.m_Height = SrcH;
 			Image.m_Format = CImageInfo::FORMAT_RGBA;
-			Image.m_pData = (uint8_t *)malloc(FrameBytes);
+			Image.Allocate();
 			if(!Image.m_pData)
 				return false;
 
@@ -522,7 +522,7 @@ namespace MediaDecoder
 			Frame.m_Image.m_Width = DstW;
 			Frame.m_Image.m_Height = DstH;
 			Frame.m_Image.m_Format = CImageInfo::FORMAT_RGBA;
-			Frame.m_Image.m_pData = (uint8_t *)malloc(FrameBytes);
+			Frame.m_Image.Allocate();
 			if(!Frame.m_Image.m_pData)
 				return false;
 

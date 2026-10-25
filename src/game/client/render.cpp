@@ -527,7 +527,7 @@ void CRenderTools::RenderTee6(const CAnimState *pAnim, const CTeeRenderInfo *pIn
 	float SizeMultiplier = (g_Config.m_TcTinyTeeSize / 100.0f);
 	bool TinyTee = g_Config.m_TcTinyTees && (IsLocal || g_Config.m_TcTinyTeesOthers);
 
-	const CSkin::CSkinTextures *pSkinTextures = pInfo->m_CustomColoredSkin ? &pInfo->m_ColorableRenderSkin : &pInfo->m_OriginalRenderSkin;
+	const CSkin::CSkinTextures *pSkinTextures = pInfo->SkinTextures(); // bestclient
 
 	// first pass we draw the outline
 	// second pass we draw the filling
