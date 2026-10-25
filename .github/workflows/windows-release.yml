@@ -16,6 +16,10 @@ on:
       tag_name:
         description: "Release tag, created on the selected branch if it does not exist (for example anim-v1)"
         required: true
+      publish:
+        description: "Publish the release, otherwise only build the package"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -71,6 +75,7 @@ jobs:
   publish:
     name: Publish Release
     needs: build-windows
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     steps:
     - name: Download release package
