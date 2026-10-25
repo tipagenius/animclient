@@ -1,8 +1,9 @@
 name: Windows Release
 
 # Flow:
-#   git tag anim-v1 && git push origin anim-v1
-#   Actions builds the Windows client and publishes it as a GitHub release for that tag.
+#   Either push a tag (git tag anim-v1 && git push origin anim-v1) or run this
+#   workflow manually with a tag name. Actions builds the Windows client and
+#   publishes it as a GitHub release; a missing tag is created on the built commit.
 #
 # Unlike release.yml this does not need the BESTCLIENT_OFFICIAL_CODE secret,
 # the resulting build is an unofficial BestClient build.
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Existing tag to publish the Windows build for"
+        description: "Release tag, created on the selected branch if it does not exist (for example anim-v1)"
         required: true
 
 permissions:
@@ -32,7 +33,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: ${{ env.TAG_NAME }}
         submodules: recursive
 
     - name: Install Vulkan SDK
@@ -71,6 +71,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ env.TAG_NAME }}
+        target_commitish: ${{ github.sha }}
         name: ${{ env.CLIENT_NAME }} ${{ env.TAG_NAME }} (animated skins)
         body: |
           Unofficial BestClient build with animated skin support (GIF/APNG/WebP).
